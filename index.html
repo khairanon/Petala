@@ -593,6 +593,10 @@ p { margin: 0; }
   .donut-wrap { flex-direction: column; }
 }
 
+.item .meta .rep { color: var(--pur-600); font-weight: 600; display: inline-flex; align-items: center; gap: 3px; }
+.item.projected { opacity: .75; }
+.item.projected .title { font-weight: 550; color: var(--ink-2); }
+
 </style>
 </head>
 <body>
@@ -848,6 +852,7 @@ function defaultState() {
       recurrences: [], savings: [], payments: [], monthlyLimit: 0,
     },
     notified: {},
+    seeds: {},
   };
 }
 
@@ -898,6 +903,20 @@ function importData(text) {
   if (!data || !data.profile || !data.fin) throw new Error('Arquivo de backup inválido');
   S = mergeDefaults(data, defaultState());
   saveNow();
+}
+/* Tarefas fixas que já vêm cadastradas (só uma vez; se excluir, não voltam) */
+function applySeeds() {
+  S.seeds = S.seeds || {};
+  if (!S.seeds.recorrentes1) {
+    const t = D.today();
+    const base = { list: 'l_pes', cat: 'c_cui', priority: 'media', due: t, done: false, doneAt: null, createdAt: t, notes: '', goal: null, nextId: null };
+    S.tasks.push(
+      { ...base, id: uid(), title: 'Passar o ácido', repeat: { every: 2, unit: 'day' } },
+      { ...base, id: uid(), title: 'Desodorante', repeat: { every: 1, unit: 'week' } },
+    );
+    S.seeds.recorrentes1 = true;
+    saveNow();
+  }
 }
 function resetAll() { S = defaultState(); saveNow(); }
 
@@ -1323,13 +1342,43 @@ function taskDueLabel(t) {
   const late = !t.done && t.due < D.today();
   return `<span class="${late ? 'late' : ''}">${ic('clock')} ${late ? 'Atrasada · ' + D.short(t.due) : D.rel(t.due)}</span>`;
 }
+/* ---------- Repetição (tarefas recorrentes) ---------- */
+const REPEAT_PRESETS = [['', 'Não repete'], ['1d', 'Todo dia'], ['2d', 'A cada 2 dias'], ['3d', 'A cada 3 dias'], ['1w', 'Toda semana'], ['2w', 'A cada 2 semanas'], ['1m', 'Todo mês'], ['custom', 'Personalizado…']];
+const UNIT_NAMES = { day: ['dia', 'dias'], week: ['semana', 'semanas'], month: ['mês', 'meses'] };
+function repeatLabel(r) {
+  if (!r) return '';
+  if (r.every === 1) return r.unit === 'day' ? 'Todo dia' : r.unit === 'week' ? 'Toda semana' : 'Todo mês';
+  return `A cada ${r.every} ${UNIT_NAMES[r.unit][1]}`;
+}
+const repeatCode = r => r ? `${r.every}${r.unit[0]}` : '';
+const parseRepeatCode = c => { const m = /^(\d+)([dwm])$/.exec(c || ''); return m ? { every: +m[1], unit: { d: 'day', w: 'week', m: 'month' }[m[2]] } : null; };
+function addRepeat(k, r) {
+  if (r.unit === 'day') return D.add(k, r.every);
+  if (r.unit === 'week') return D.add(k, 7 * r.every);
+  return D.dayOf(D.addMonths(D.month(k), r.every), +k.slice(8));
+}
+/* próximas ocorrências previstas (só para exibir no calendário) */
+function projectedTasks(d) {
+  if (d <= D.today()) return [];
+  return S.tasks.filter(t => !t.done && t.repeat && t.due && t.due < d).filter(t => {
+    let k = t.due, g = 0;
+    while (k < d && g++ < 400) k = addRepeat(k, t.repeat);
+    return k === d;
+  });
+}
+function createNextOccurrence(t, base) {
+  const next = { ...t, id: uid(), done: false, doneAt: null, createdAt: D.today(), nextId: null, series: t.series || t.id, due: addRepeat(base, t.repeat) };
+  S.tasks.push(next);
+  return next;
+}
+
 function taskItem(t, o = {}) {
   const c = catById(t.cat), l = listById(t.list);
   return `<div class="item ${t.done ? 'done' : ''}" data-task="${t.id}">
     <button class="check prio-${t.priority} ${t.done ? 'on' : ''}" data-act="toggleTask" data-id="${t.id}" aria-label="Concluir">${ic('check')}</button>
     <div class="body" data-act="editTask" data-id="${t.id}">
       <div class="title">${esc(t.title)}</div>
-      <div class="meta">${taskDueLabel(t)}${catChip(c, true)}${t.priority === 'alta' ? `<span class="pill bad" style="height:20px;font-size:11px">${ic('flag')}Alta</span>` : ''}${!o.hideList && l && UI.taskList === 'all' ? `<span>${esc(l.name)}</span>` : ''}${t.goal ? `<span>${ic('target')}</span>` : ''}</div>
+      <div class="meta">${taskDueLabel(t)}${catChip(c, true)}${t.priority === 'alta' ? `<span class="pill bad" style="height:20px;font-size:11px">${ic('flag')}Alta</span>` : ''}${!o.hideList && l && UI.taskList === 'all' ? `<span>${esc(l.name)}</span>` : ''}${t.goal ? `<span>${ic('target')}</span>` : ''}${t.repeat ? `<span class="rep">${ic('repeat')} ${repeatLabel(t.repeat)}</span>` : ''}</div>
     </div>
   </div>`;
 }
@@ -1352,8 +1401,17 @@ function toggleTask(id) {
     t.doneAt = D.today();
     award('task:' + t.id, XP.task[t.priority] || 10, 'Tarefa: ' + t.title);
     burst(); haptic();
-    if (Math.random() < .55) toast(pick(ENCOURAGE), 'heart');
-  } else { t.doneAt = null; revoke('task:' + t.id); }
+    if (t.repeat && !t.nextId) {
+      const next = createNextOccurrence(t, D.today()); // conta a partir de quando você fez
+      t.nextId = next.id;
+      toast(`Feito! Próxima vez: ${D.rel(next.due).toLowerCase()} (${D.short(next.due)})`, 'repeat');
+    } else if (Math.random() < .55) toast(pick(ENCOURAGE), 'heart');
+  } else {
+    t.doneAt = null; revoke('task:' + t.id);
+    const next = t.nextId && S.tasks.find(x => x.id === t.nextId);
+    if (next && !next.done) S.tasks = S.tasks.filter(x => x.id !== next.id);
+    t.nextId = null;
+  }
   refresh();
 }
 ACT.toggleTask = el => toggleTask(el.dataset.id);
@@ -1415,12 +1473,30 @@ function taskForm(t = {}) {
       ${fieldset('Prioridade', segmented('priority', [{ value: 'baixa', label: 'Baixa' }, { value: 'media', label: 'Média' }, { value: 'alta', label: 'Alta' }], t.priority || 'media'))}
       <div class="inline-fields">${field('Prazo', `<input type="date" name="due" value="${t.due || ''}">`)}
       ${field('Meta vinculada', `<select name="goal"><option value="">Nenhuma</option>${goals.map(g => `<option value="${g.id}" ${g.id === t.goal ? 'selected' : ''}>${esc(g.title)}</option>`).join('')}</select>`)}</div>
+      ${field('Repetir', `<select name="repeat">${REPEAT_PRESETS.map(([v, l]) => `<option value="${v}" ${(REPEAT_PRESETS.some(p => p[0] === repeatCode(t.repeat)) ? repeatCode(t.repeat) : (t.repeat ? 'custom' : '')) === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`)}
+      <div class="inline-fields rep-custom" ${t.repeat && !REPEAT_PRESETS.some(p => p[0] === repeatCode(t.repeat)) ? '' : 'hidden'}>
+        ${field('A cada', `<input type="number" name="repEvery" min="1" max="365" value="${t.repeat ? t.repeat.every : 2}">`)}
+        ${field('Unidade', `<select name="repUnit">${Object.entries(UNIT_NAMES).map(([u, n]) => `<option value="${u}" ${(t.repeat ? t.repeat.unit : 'day') === u ? 'selected' : ''}>${n[1]}</option>`).join('')}</select>`)}
+      </div>
+      <p class="hint rep-hint" ${t.repeat ? '' : 'hidden'}>Ao concluir, a próxima é criada automaticamente, contando a partir do dia em que você fez.</p>
       ${fieldset('Categoria', chipsRadio('cat', catOptions(), t.cat || 'c_out', 'scroll'))}
       ${field('Observações', `<textarea name="notes" rows="2" placeholder="Opcional">${esc(t.notes || '')}</textarea>`)}
       <div class="btn-row">${!isNew ? `<button type="button" class="btn danger" data-act="delTask" data-id="${t.id}">${ic('trash')}</button>` : ''}<button class="btn primary">${isNew ? 'Adicionar' : 'Salvar'}</button></div>
+      ${!isNew && t.repeat && !t.done ? `<button type="button" class="btn ghost block" data-act="skipTask" data-id="${t.id}">${ic('repeat')} Pular desta vez</button>` : ''}
     </form>`,
+    onMount: sh => {
+      const sel = sh.querySelector('[name=repeat]');
+      sel.addEventListener('change', () => {
+        sh.querySelector('.rep-custom').hidden = sel.value !== 'custom';
+        sh.querySelector('.rep-hint').hidden = !sel.value;
+        const due = sh.querySelector('[name=due]');
+        if (sel.value && !due.value) due.value = D.today();
+      });
+    },
     onSubmit: fd => {
-      const data = { title: fd.get('title').trim(), list: fd.get('list'), priority: fd.get('priority'), due: fd.get('due') || null, cat: fd.get('cat'), notes: fd.get('notes').trim(), goal: fd.get('goal') || null };
+      const rc = fd.get('repeat');
+      const repeat = rc === 'custom' ? { every: clamp(+fd.get('repEvery') || 1, 1, 365), unit: fd.get('repUnit') } : parseRepeatCode(rc);
+      const data = { title: fd.get('title').trim(), list: fd.get('list'), priority: fd.get('priority'), due: fd.get('due') || (repeat ? D.today() : null), cat: fd.get('cat'), notes: fd.get('notes').trim(), goal: fd.get('goal') || null, repeat };
       if (!data.title) return false;
       if (isNew) { S.tasks.push({ id: uid(), createdAt: D.today(), done: false, doneAt: null, ...data }); toast('Tarefa criada', 'check'); }
       else {
@@ -1435,10 +1511,19 @@ function taskForm(t = {}) {
 ACT.newTask = () => taskForm({ due: UI.route === 'agenda' ? UI.agendaDate : null });
 ACT.editTask = el => taskForm(S.tasks.find(t => t.id === el.dataset.id));
 ACT.delTask = async el => {
-  if (!await ask('Esta tarefa será excluída.', { ok: 'Excluir', danger: true, title: 'Excluir tarefa?' })) return;
+  const t0 = S.tasks.find(t => t.id === el.dataset.id);
+  const msg = t0 && t0.repeat && !t0.done ? `Ela repete (${repeatLabel(t0.repeat).toLowerCase()}). Ao excluir, a repetição para. Se quiser só pular hoje, use "Pular desta vez".` : 'Esta tarefa será excluída.';
+  if (!await ask(msg, { ok: 'Excluir', danger: true, title: 'Excluir tarefa?' })) return;
   revoke('task:' + el.dataset.id);
   S.tasks = S.tasks.filter(t => t.id !== el.dataset.id);
   closeSheet(); refresh(); toast('Tarefa excluída', 'trash');
+};
+
+ACT.skipTask = el => {
+  const t = S.tasks.find(x => x.id === el.dataset.id); if (!t || !t.repeat) return;
+  const next = createNextOccurrence(t, t.due || D.today()); // mantém o ritmo pelo prazo
+  S.tasks = S.tasks.filter(x => x.id !== t.id);
+  closeSheet(); refresh(); toast(`Pulada. Próxima: ${D.short(next.due)}`, 'repeat');
 };
 
 /* ---------- Listas ---------- */
@@ -1493,13 +1578,15 @@ function eventItem(e, o = {}) {
   </div>`;
 }
 function dayItems(d, o = {}) {
-  const ev = eventsOn(d), tk = tasksDueOn(d);
+  const ev = eventsOn(d), tk = tasksDueOn(d), pj = projectedTasks(d);
+  const pjHtml = pj.map(t => `<div class="item projected" data-act="editTask" data-id="${t.id}"><span class="check" style="--c:#D9CCE8;opacity:.6"></span><div class="body"><div class="title">${esc(t.title)}</div><div class="meta"><span class="rep">${ic('repeat')} previsto · ${repeatLabel(t.repeat).toLowerCase()}</span></div></div></div>`).join('');
+  if (!ev.length && !tk.length && pj.length) return pjHtml;
   if (!ev.length && !tk.length) return o.emptyHtml ?? `<p class="free-day">${ic('leaf')} Dia livre: nada agendado</p>`;
-  return ev.map(e => eventItem(e)).join('') + (tk.length ? `${ev.length ? '<div class="group-label">Tarefas com prazo</div>' : ''}${tk.map(t => taskItem(t)).join('')}` : '');
+  return ev.map(e => eventItem(e)).join('') + (tk.length ? `${ev.length ? '<div class="group-label">Tarefas com prazo</div>' : ''}${tk.map(t => taskItem(t)).join('')}` : '') + pjHtml;
 }
 function dayDots(d) {
   const cols = [...new Set(eventsOn(d).map(e => catById(e.cat).color))].slice(0, 3);
-  const hasTask = S.tasks.some(t => t.due === d && !t.done);
+  const hasTask = S.tasks.some(t => t.due === d && !t.done) || projectedTasks(d).length > 0;
   return `<span class="dots">${cols.map(c => `<i style="background:${c}"></i>`).join('')}${hasTask ? '<i class="tdot"></i>' : ''}</span>`;
 }
 function toggleEvent(id) {
@@ -2250,7 +2337,7 @@ CHG.importBackup = el => {
 ACT.resetAll = async () => {
   if (!await ask('Tudo será apagado deste aparelho: tarefas, agenda, hábitos, finanças e XP. Faça um backup antes.', { ok: 'Apagar tudo', danger: true, title: 'Tem certeza?' })) return;
   if (!await ask('Essa ação não pode ser desfeita.', { ok: 'Sim, apagar', danger: true, title: 'Última confirmação' })) return;
-  resetAll(); applyAccent(); go('home'); render(true); showOnboarding();
+  resetAll(); applySeeds(); applyAccent(); go('home'); render(true); showOnboarding();
 };
 
 /* ---------- Como instalar ---------- */
@@ -3317,6 +3404,7 @@ function onResume() {
 
 function init() {
   loadState();
+  applySeeds();
   buildShell();
   applyAccent();
   lastDay = D.today();

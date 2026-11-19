@@ -1,5 +1,5 @@
 /* Service worker do Pétala: guarda o app em cache para funcionar offline */
-const VERSION = 'petala-20261118141637';
+const VERSION = 'petala-20261119090239';
 const ASSETS = ['./', './index.html', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
