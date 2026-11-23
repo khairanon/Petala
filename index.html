@@ -311,6 +311,13 @@ p { margin: 0; }
 .stat span { font-size: 12.5px; color: var(--muted); font-weight: 600; }
 .stat .ic { width: 18px; height: 18px; color: var(--accent-strong); margin-bottom: 6px; }
 
+.dlg-col { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
+
+.update-bar { position: fixed; z-index: 90; left: 12px; right: 12px; bottom: calc(var(--tabbar-h) + var(--sab) + 86px); max-width: 520px; margin: 0 auto; display: flex; align-items: center; gap: 10px; padding: 10px 10px 10px 14px; border-radius: 18px; background: rgba(59, 46, 69, .94); color: #fff; font-weight: 600; font-size: 14.5px; box-shadow: 0 14px 30px -12px rgba(59, 46, 69, .6); transform: translateY(20px); opacity: 0; transition: all .35s cubic-bezier(.3, 1.4, .5, 1); }
+.update-bar.show { transform: none; opacity: 1; }
+.update-bar span { flex: 1; }
+.update-bar .ic { color: var(--rose-300); }
+
 /* ============================================================
    Estilos específicos de cada tela
    ============================================================ */
@@ -1045,6 +1052,20 @@ function ask(msg, { ok = 'Confirmar', cancel = 'Cancelar', danger = false, title
   });
 }
 
+/* Diálogo com várias opções → devolve o valor escolhido (ou null) */
+function choose(title, msg, opts) {
+  return new Promise(res => {
+    const root = $('#dialog-root');
+    root.innerHTML = `<div class="dlg-backdrop"></div><div class="dlg" role="alertdialog"><h4>${title}</h4><p>${msg}</p>
+      <div class="dlg-col">${opts.map((o, i) => `<button type="button" class="btn ${o.cls || 'soft'} block" data-i="${i}">${o.label}</button>`).join('')}<button type="button" class="btn ghost block" data-i="-1">Cancelar</button></div></div>`;
+    root.hidden = false;
+    requestAnimationFrame(() => root.classList.add('show'));
+    const done = v => { root.classList.remove('show'); setTimeout(() => { root.hidden = true; root.innerHTML = ''; }, 200); res(v); };
+    root.querySelectorAll('[data-i]').forEach(b => b.onclick = () => done(+b.dataset.i < 0 ? null : opts[+b.dataset.i].v));
+    root.querySelector('.dlg-backdrop').onclick = () => done(null);
+  });
+}
+
 /* ---------- Toasts e animações ---------- */
 function toast(msg, icon = 'sparkle') {
   const host = $('#toasts');
@@ -1204,10 +1225,18 @@ const awardsToday = prefix => { const t = D.today(); let n = 0; for (const k in 
 const countAwards = prefix => Object.keys(S.game.awards).filter(k => k.startsWith(prefix)).length;
 
 /* ---------- Atividade e dias produtivos ---------- */
+function eventsDoneOn(day) {
+  let n = 0;
+  for (const e of S.events) {
+    if (e.repeat) { for (const k in (e.doneDates || {})) if (e.doneDates[k] === day) n++; }
+    else if (e.done && (e.doneAt || e.date) === day) n++;
+  }
+  return n;
+}
 function activityOn(day) {
   let n = 0;
   for (const t of S.tasks) if (t.done && t.doneAt === day) n++;
-  for (const e of S.events) if (e.done && (e.doneAt || e.date) === day) n++;
+  n += eventsDoneOn(day);
   for (const h of S.habits) if (h.log && h.log[day]) n++;
   for (const g of S.goals) for (const s of (g.steps || [])) if (s.done && s.doneAt === day) n++;
   return n;
@@ -1223,7 +1252,7 @@ function bestProductiveStreak() {
   const days = new Set();
   S.tasks.forEach(t => t.doneAt && days.add(t.doneAt));
   S.habits.forEach(h => Object.keys(h.log || {}).forEach(k => days.add(k)));
-  S.events.forEach(e => e.done && days.add(e.doneAt || e.date));
+  S.events.forEach(e => { if (e.done) days.add(e.doneAt || e.date); Object.values(e.doneDates || {}).forEach(d => days.add(d)); });
   let best = 0;
   [...days].sort().forEach(d => { if (!isProductive(d) || isProductive(D.add(d, -1))) return; let n = 0, k = d; while (isProductive(k)) { n++; k = D.add(k, 1); } best = Math.max(best, n); });
   return best;
@@ -1237,7 +1266,7 @@ const DAILY_POOL = [
   { id: 'thigh', icon: 'flag', title: () => 'Concluir 1 tarefa de alta prioridade', target: () => 1, xp: 20, avail: () => S.tasks.some(t => t.priority === 'alta'), prog: d => S.tasks.filter(t => t.done && t.doneAt === d && t.priority === 'alta').length },
   { id: 'hall', icon: 'habits', title: () => 'Marcar todos os hábitos de hoje', target: d => Math.max(1, habitsDueOn(d).length), xp: 20, avail: d => habitsDueOn(d).length > 0, prog: d => habitsDueOn(d).filter(h => h.log[d]).length },
   { id: 'note', icon: 'note', title: () => 'Escrever uma anotação', target: () => 1, xp: 10, prog: d => S.notes.filter(n => n.createdAt === d).length },
-  { id: 'ev', icon: 'calendar', title: () => 'Concluir um compromisso', target: () => 1, xp: 15, avail: d => S.events.some(e => e.date === d), prog: d => S.events.filter(e => e.done && (e.doneAt || e.date) === d).length },
+  { id: 'ev', icon: 'calendar', title: () => 'Concluir um compromisso', target: () => 1, xp: 15, avail: d => eventsOn(d).length > 0, prog: d => eventsDoneOn(d) },
   { id: 'step', icon: 'star', title: () => 'Avançar uma etapa de uma meta', target: () => 1, xp: 15, avail: () => S.goals.some(g => !g.done && (g.steps || []).some(s => !s.done)), prog: d => sum(S.goals, g => (g.steps || []).filter(s => s.done && s.doneAt === d).length) },
   { id: 'fin', icon: 'wallet', title: () => 'Registrar suas movimentações do dia', target: () => 1, xp: 15, prog: d => S.fin.tx.filter(t => t.createdAt === d).length },
 ];
@@ -1343,10 +1372,12 @@ function taskDueLabel(t) {
   return `<span class="${late ? 'late' : ''}">${ic('clock')} ${late ? 'Atrasada · ' + D.short(t.due) : D.rel(t.due)}</span>`;
 }
 /* ---------- Repetição (tarefas recorrentes) ---------- */
-const REPEAT_PRESETS = [['', 'Não repete'], ['1d', 'Todo dia'], ['2d', 'A cada 2 dias'], ['3d', 'A cada 3 dias'], ['1w', 'Toda semana'], ['2w', 'A cada 2 semanas'], ['1m', 'Todo mês'], ['custom', 'Personalizado…']];
+const REPEAT_PRESETS = [['', 'Não repete'], ['1d', 'Todo dia'], ['2d', 'Dia sim, dia não'], ['3d', 'A cada 3 dias'], ['1w', 'Toda semana'], ['2w', 'A cada 2 semanas'], ['1m', 'Todo mês'], ['custom', 'Personalizado…']];
 const UNIT_NAMES = { day: ['dia', 'dias'], week: ['semana', 'semanas'], month: ['mês', 'meses'] };
 function repeatLabel(r) {
   if (!r) return '';
+  if (r.unit === 'weekdays') return r.days.join() === '1,2,3,4,5' ? 'Dias úteis' : r.days.map(i => WD[i]).join(', ');
+  if (r.unit === 'day' && r.every === 2) return 'Dia sim, dia não';
   if (r.every === 1) return r.unit === 'day' ? 'Todo dia' : r.unit === 'week' ? 'Toda semana' : 'Todo mês';
   return `A cada ${r.every} ${UNIT_NAMES[r.unit][1]}`;
 }
@@ -1562,7 +1593,30 @@ ACT.delList = async el => {
 /* ============================================================
    Agenda e calendário: visões diária, semanal e mensal
    ============================================================ */
-const eventsOn = d => S.events.filter(e => e.date === d).sort((a, b) => (a.allDay ? -1 : 0) - (b.allDay ? -1 : 0) || (a.start || '').localeCompare(b.start || ''));
+/* ---------- Repetição de compromissos ---------- */
+const EV_REPEAT = [['', 'Não repete'], ['1d', 'Todo dia'], ['2d', 'Dia sim, dia não'], ['wd', 'Dias úteis (seg a sex)'], ['1w', 'Toda semana'], ['2w', 'A cada 2 semanas'], ['1m', 'Todo mês'], ['days', 'Escolher dias da semana'], ['custom', 'Personalizado…']];
+function evRepeatCode(r) {
+  if (!r) return '';
+  if (r.unit === 'weekdays') return r.every === 1 && r.days.join() === '1,2,3,4,5' ? 'wd' : 'days';
+  const c = repeatCode(r);
+  return EV_REPEAT.some(p => p[0] === c) ? c : 'custom';
+}
+function occursOn(e, d) {
+  const r = e.repeat;
+  if (!r) return e.date === d;
+  if (d < e.date || (r.until && d > r.until) || (e.exceptions && e.exceptions[d])) return false;
+  const diff = D.diff(d, e.date);
+  if (r.unit === 'day') return diff % r.every === 0;
+  if (r.unit === 'week') return diff % (7 * r.every) === 0;
+  if (r.unit === 'weekdays') return r.days.includes(D.weekday(d)) && (r.every === 1 || (D.diff(D.weekStart(d), D.weekStart(e.date)) / 7) % r.every === 0);
+  if (r.unit === 'month') {
+    const md = (+d.slice(0, 4) - +e.date.slice(0, 4)) * 12 + (+d.slice(5, 7) - +e.date.slice(5, 7));
+    return md % r.every === 0 && d === D.dayOf(D.month(d), +e.date.slice(8));
+  }
+  return false;
+}
+/* devolve as ocorrências do dia (cópias com a data e o "feito" daquele dia) */
+const eventsOn = d => S.events.filter(e => occursOn(e, d)).map(e => e.repeat ? { ...e, date: d, done: !!(e.doneDates && e.doneDates[d]) } : e).sort((a, b) => (a.allDay ? -1 : 0) - (b.allDay ? -1 : 0) || (a.start || '').localeCompare(b.start || ''));
 const tasksDueOn = d => S.tasks.filter(t => t.due === d);
 
 function eventItem(e, o = {}) {
@@ -1570,11 +1624,11 @@ function eventItem(e, o = {}) {
   return `<div class="item ${e.done ? 'done' : ''}">
     <div class="timebox">${e.allDay || !e.start ? '<small>dia</small>todo' : `${e.start}${e.end ? `<small>${e.end}</small>` : ''}`}</div>
     <span class="colorbar" style="--c:${c.color}"></span>
-    <div class="body" data-act="editEvent" data-id="${e.id}">
+    <div class="body" data-act="editEvent" data-id="${e.id}" data-d="${e.date}">
       <div class="title">${esc(e.title)}</div>
-      <div class="meta">${o.showDate ? `<span>${ic('calendar')} ${D.rel(e.date)}</span>` : ''}${catChip(c, true)}${e.desc ? `<span>${esc(e.desc.slice(0, 40))}${e.desc.length > 40 ? '…' : ''}</span>` : ''}</div>
+      <div class="meta">${o.showDate ? `<span>${ic('calendar')} ${D.rel(e.date)}</span>` : ''}${catChip(c, true)}${e.repeat ? `<span class="rep">${ic('repeat')} ${repeatLabel(e.repeat)}</span>` : ''}${e.desc ? `<span>${esc(e.desc.slice(0, 40))}${e.desc.length > 40 ? '…' : ''}</span>` : ''}</div>
     </div>
-    <button class="check sq ${e.done ? 'on' : ''}" style="--c:${c.color}" data-act="toggleEvent" data-id="${e.id}" aria-label="Concluir">${ic('check')}</button>
+    <button class="check sq ${e.done ? 'on' : ''}" style="--c:${c.color}" data-act="toggleEvent" data-id="${e.id}" data-d="${e.date}" aria-label="Concluir">${ic('check')}</button>
   </div>`;
 }
 function dayItems(d, o = {}) {
@@ -1589,14 +1643,21 @@ function dayDots(d) {
   const hasTask = S.tasks.some(t => t.due === d && !t.done) || projectedTasks(d).length > 0;
   return `<span class="dots">${cols.map(c => `<i style="background:${c}"></i>`).join('')}${hasTask ? '<i class="tdot"></i>' : ''}</span>`;
 }
-function toggleEvent(id) {
+function toggleEvent(id, d) {
   const e = S.events.find(x => x.id === id); if (!e) return;
+  if (e.repeat) { // cada dia da série é concluído separadamente
+    d = d || D.today(); e.doneDates = e.doneDates || {};
+    const key = `event:${e.id}:${d}`;
+    if (e.doneDates[d]) { delete e.doneDates[d]; revoke(key); }
+    else { e.doneDates[d] = D.today(); award(key, XP.event, 'Compromisso: ' + e.title); burst(); haptic(); }
+    return refresh();
+  }
   e.done = !e.done;
   if (e.done) { e.doneAt = D.today(); award('event:' + e.id, XP.event, 'Compromisso: ' + e.title); burst(); haptic(); }
   else { e.doneAt = null; revoke('event:' + e.id); }
   refresh();
 }
-ACT.toggleEvent = el => toggleEvent(el.dataset.id);
+ACT.toggleEvent = el => toggleEvent(el.dataset.id, el.dataset.d);
 
 /* ---------- Calendário mensal ---------- */
 function monthGrid(mk, sel, compact = false) {
@@ -1634,7 +1695,7 @@ VIEWS.agenda = () => {
     let tl = '';
     for (let h = h0; h <= h1; h++) {
       const hs = timed.filter(e => +e.start.slice(0, 2) === h);
-      tl += `<div class="tl-row ${h === nowH ? 'now' : ''}"><span class="tl-h">${pad(h)}:00</span><div class="tl-slot" ${hs.length ? '' : `data-act="newEventAt" data-d="${sel}" data-t="${pad(h)}:00"`}>${hs.map(e => { const c = catById(e.cat); return `<div class="tl-ev ${e.done ? 'done' : ''}" style="--c:${c.color};--ci:${shade(c.color, .5)}" data-act="editEvent" data-id="${e.id}"><b>${esc(e.title)}</b><small>${e.start}${e.end ? '–' + e.end : ''} · ${esc(c.name)}</small></div>`; }).join('')}</div></div>`;
+      tl += `<div class="tl-row ${h === nowH ? 'now' : ''}"><span class="tl-h">${pad(h)}:00</span><div class="tl-slot" ${hs.length ? '' : `data-act="newEventAt" data-d="${sel}" data-t="${pad(h)}:00"`}>${hs.map(e => { const c = catById(e.cat); return `<div class="tl-ev ${e.done ? 'done' : ''}" style="--c:${c.color};--ci:${shade(c.color, .5)}" data-act="editEvent" data-id="${e.id}" data-d="${e.date}"><b>${esc(e.title)}</b><small>${e.start}${e.end ? '–' + e.end : ''} · ${esc(c.name)}${e.repeat ? ' · ↻' : ''}</small></div>`; }).join('')}</div></div>`;
     }
     const tk = tasksDueOn(sel);
     main = `${allDay.length ? `<div class="card list">${allDay.map(e => eventItem(e)).join('')}</div>` : ''}
@@ -1643,7 +1704,7 @@ VIEWS.agenda = () => {
   }
   // atrasadas e próximas
   const overdue = sortTasks(S.tasks.filter(x => !x.done && x.due && x.due < t));
-  const nextEv = S.events.filter(e => e.date > t && e.date <= D.add(t, 7)).sort((a, b) => (a.date + (a.start || '')).localeCompare(b.date + (b.start || '')));
+  const nextEv = D.range(D.add(t, 1), D.add(t, 7)).flatMap(d => eventsOn(d));
   const nextTk = sortTasks(S.tasks.filter(x => !x.done && x.due && x.due > t && x.due <= D.add(t, 7)));
   return `${pageHead('Agenda', { sub: D.long(t), right: `<button class="btn soft sm" data-act="agendaToday">Hoje</button>` })}
   <div class="seg btns">${[['day', 'Dia'], ['week', 'Semana'], ['month', 'Mês']].map(([v, l]) => `<button class="${mode === v ? 'on' : ''}" data-act="agendaMode" data-v="${v}">${l}</button>`).join('')}</div>
@@ -1669,30 +1730,56 @@ ACT.pickDay = el => {
 };
 
 /* ---------- Formulário de compromisso ---------- */
-function eventForm(e = {}) {
+function eventForm(e = {}, occ = null) {
   const isNew = !e.id;
+  const r = e.repeat, code = evRepeatCode(r);
+  const days = r && r.unit === 'weekdays' ? r.days : [D.weekday(e.date || UI.agendaDate || D.today())];
   openSheet({
     title: isNew ? 'Novo compromisso' : 'Editar compromisso',
     html: `<form class="form">
       ${field('Título', `<input name="title" required maxlength="120" placeholder="Ex.: Aula de Nutrição Clínica" value="${esc(e.title || '')}">`)}
-      ${field('Data', `<input type="date" name="date" required value="${e.date || UI.agendaDate || D.today()}">`)}
+      ${!isNew && r ? `<div class="alert ok">${ic('repeat')}<span>Compromisso repetido (${repeatLabel(r).toLowerCase()}). As mudanças valem para todos os dias da série.</span></div>` : ''}
+      ${field(r ? 'Começa em' : 'Data', `<input type="date" name="date" required value="${e.date || UI.agendaDate || D.today()}">`)}
       ${toggle('allDay', e.allDay, 'Dia inteiro')}
       <div class="inline-fields time-fields" ${e.allDay ? 'hidden' : ''}>${field('Início', `<input type="time" name="start" value="${e.start || ''}">`)}${field('Fim', `<input type="time" name="end" value="${e.end || ''}">`)}</div>
+      ${field('Repetir', `<select name="repeat">${EV_REPEAT.map(([v, l]) => `<option value="${v}" ${code === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`)}
+      <div class="rep-days" ${code === 'days' ? '' : 'hidden'}>${fieldset('Em quais dias?', `<div class="chips days">${WD.map((w, i) => `<label class="chip-opt"><input type="checkbox" name="repDays" value="${i}" ${days.includes(i) ? 'checked' : ''}><span>${w}</span></label>`).join('')}</div>`)}</div>
+      <div class="inline-fields rep-custom" ${code === 'custom' ? '' : 'hidden'}>
+        ${field('A cada', `<input type="number" name="repEvery" min="1" max="365" value="${r && r.unit !== 'weekdays' ? r.every : 2}">`)}
+        ${field('Unidade', `<select name="repUnit">${Object.entries(UNIT_NAMES).map(([u, n]) => `<option value="${u}" ${(r ? r.unit : 'day') === u ? 'selected' : ''}>${n[1]}</option>`).join('')}</select>`)}
+      </div>
+      <div class="rep-until" ${code ? '' : 'hidden'}>${field('Repetir até (opcional)', `<input type="date" name="repUntil" value="${(r && r.until) || ''}">`)}<p class="hint">Deixe em branco para repetir sem data para acabar.</p></div>
       ${fieldset('Categoria', chipsRadio('cat', catOptions(), e.cat || 'c_out', 'scroll'))}
       ${field('Descrição', `<textarea name="desc" rows="2" placeholder="Local, links, detalhes…">${esc(e.desc || '')}</textarea>`)}
       ${field('Lembrete', `<select name="reminder">${[[-1, 'Sem lembrete'], [0, 'Na hora'], [10, '10 min antes'], [15, '15 min antes'], [30, '30 min antes'], [60, '1 hora antes'], [1440, '1 dia antes']].map(([v, l]) => `<option value="${v}" ${+(e.reminder ?? S.settings.eventReminder) === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`)}
       ${!isNew ? `<button type="button" class="btn ghost block" data-act="eventICS" data-id="${e.id}">${ic('calPlus')} Adicionar ao Calendário do iPhone</button>` : ''}
-      <div class="btn-row">${!isNew ? `<button type="button" class="btn danger" data-act="delEvent" data-id="${e.id}">${ic('trash')}</button>` : ''}<button class="btn primary">${isNew ? 'Agendar' : 'Salvar'}</button></div>
+      <div class="btn-row">${!isNew ? `<button type="button" class="btn danger" data-act="delEvent" data-id="${e.id}" data-d="${occ || e.date}">${ic('trash')}</button>` : ''}<button class="btn primary">${isNew ? 'Agendar' : 'Salvar'}</button></div>
     </form>`,
-    onMount: sh => { sh.querySelector('[name=allDay]').addEventListener('change', ev => { sh.querySelector('.time-fields').hidden = ev.target.checked; }); },
+    onMount: sh => {
+      sh.querySelector('[name=allDay]').addEventListener('change', ev => { sh.querySelector('.time-fields').hidden = ev.target.checked; });
+      const sel = sh.querySelector('[name=repeat]');
+      sel.addEventListener('change', () => {
+        sh.querySelector('.rep-days').hidden = sel.value !== 'days';
+        sh.querySelector('.rep-custom').hidden = sel.value !== 'custom';
+        sh.querySelector('.rep-until').hidden = !sel.value;
+      });
+    },
     onSubmit: fd => {
-      const data = { title: fd.get('title').trim(), date: fd.get('date'), allDay: !!fd.get('allDay'), start: fd.get('start') || '', end: fd.get('end') || '', cat: fd.get('cat'), desc: fd.get('desc').trim(), reminder: +fd.get('reminder') };
+      const rc = fd.get('repeat');
+      let repeat = null;
+      if (rc === 'wd') repeat = { every: 1, unit: 'weekdays', days: [1, 2, 3, 4, 5] };
+      else if (rc === 'days') { const ds = fd.getAll('repDays').map(Number).sort(); repeat = { every: 1, unit: 'weekdays', days: ds.length ? ds : [D.weekday(fd.get('date'))] }; }
+      else if (rc === 'custom') repeat = { every: clamp(+fd.get('repEvery') || 1, 1, 365), unit: fd.get('repUnit') };
+      else repeat = parseRepeatCode(rc);
+      if (repeat && fd.get('repUntil')) repeat.until = fd.get('repUntil');
+      const data = { title: fd.get('title').trim(), date: fd.get('date'), allDay: !!fd.get('allDay'), start: fd.get('start') || '', end: fd.get('end') || '', cat: fd.get('cat'), desc: fd.get('desc').trim(), reminder: +fd.get('reminder'), repeat };
       if (!data.title || !data.date) return false;
+      if (repeat && repeat.until && repeat.until < data.date) { toast('A data final precisa ser depois do início', 'alert'); return false; }
       if (data.allDay) { data.start = ''; data.end = ''; }
       if (data.end && data.start && data.end < data.start) data.end = '';
-      if (isNew) { S.events.push({ id: uid(), createdAt: D.today(), done: false, ...data }); toast('Compromisso agendado', 'calendar'); }
+      if (isNew) { S.events.push({ id: uid(), createdAt: D.today(), done: false, ...data }); toast(repeat ? `Agendado: ${repeatLabel(repeat).toLowerCase()}` : 'Compromisso agendado', repeat ? 'repeat' : 'calendar'); }
       else Object.assign(S.events.find(x => x.id === e.id), data);
-      UI.agendaDate = data.date;
+      if (!repeat || !occ) UI.agendaDate = data.date;
       refresh();
     }
   });
@@ -1700,11 +1787,30 @@ function eventForm(e = {}) {
 ACT.newEvent = () => eventForm({ date: UI.route === 'agenda' ? UI.agendaDate : D.today() });
 ACT.newEventOn = el => eventForm({ date: el.dataset.d });
 ACT.newEventAt = el => eventForm({ date: el.dataset.d, start: el.dataset.t, end: pad((+el.dataset.t.slice(0, 2) + 1) % 24) + ':00' });
-ACT.editEvent = el => eventForm(S.events.find(e => e.id === el.dataset.id));
+ACT.editEvent = el => eventForm(S.events.find(e => e.id === el.dataset.id), el.dataset.d || null);
+function removeEventSeries(e) {
+  revoke('event:' + e.id);
+  Object.keys(e.doneDates || {}).forEach(d => revoke(`event:${e.id}:${d}`));
+  S.events = S.events.filter(x => x.id !== e.id);
+}
 ACT.delEvent = async el => {
-  if (!await ask('Este compromisso será excluído.', { ok: 'Excluir', danger: true, title: 'Excluir compromisso?' })) return;
-  revoke('event:' + el.dataset.id);
-  S.events = S.events.filter(e => e.id !== el.dataset.id);
+  const e = S.events.find(x => x.id === el.dataset.id); if (!e) return;
+  if (!e.repeat) {
+    if (!await ask('Este compromisso será excluído.', { ok: 'Excluir', danger: true, title: 'Excluir compromisso?' })) return;
+    removeEventSeries(e);
+  } else {
+    const d = el.dataset.d || D.today();
+    const opt = await choose('Excluir compromisso repetido', `"${esc(e.title)}" · ${D.short(d)}`, [
+      { v: 'one', label: 'Só este dia' }, { v: 'next', label: 'Este e os próximos' }, { v: 'all', label: 'Todos os dias', cls: 'danger' }]);
+    if (!opt) return;
+    if (opt === 'one') {
+      e.exceptions = e.exceptions || {}; e.exceptions[d] = true;
+      if (e.doneDates && e.doneDates[d]) { delete e.doneDates[d]; revoke(`event:${e.id}:${d}`); }
+    } else if (opt === 'next' && d > e.date) {
+      e.repeat.until = D.add(d, -1);
+      Object.keys(e.doneDates || {}).filter(k => k >= d).forEach(k => { delete e.doneDates[k]; revoke(`event:${e.id}:${k}`); });
+    } else removeEventSeries(e);
+  }
   closeSheet(); refresh(); toast('Compromisso excluído', 'trash');
 };
 
@@ -1719,6 +1825,13 @@ function buildICS(evs) {
     else { lines.push(`DTSTART:${icsDate(e.date, e.start)}`); if (e.end) lines.push(`DTEND:${icsDate(e.date, e.end)}`); }
     if (e.desc) lines.push(`DESCRIPTION:${e.desc.replace(/\n/g, '\\n').replace(/[,;]/g, ' ')}`);
     lines.push(`CATEGORIES:${catById(e.cat).name}`);
+    if (e.repeat) {
+      const r = e.repeat, BY = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
+      let rule = r.unit === 'day' ? `FREQ=DAILY;INTERVAL=${r.every}` : r.unit === 'week' ? `FREQ=WEEKLY;INTERVAL=${r.every}` : r.unit === 'month' ? `FREQ=MONTHLY;INTERVAL=${r.every}` : `FREQ=WEEKLY;INTERVAL=${r.every};BYDAY=${r.days.map(i => BY[i]).join(',')}`;
+      if (r.until) rule += `;UNTIL=${icsDate(r.until)}${allDay ? '' : 'T235959'}`;
+      lines.push('RRULE:' + rule);
+      Object.keys(e.exceptions || {}).forEach(x => lines.push(allDay ? `EXDATE;VALUE=DATE:${icsDate(x)}` : `EXDATE:${icsDate(x, e.start)}`));
+    }
     if (e.reminder >= 0) lines.push('BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${(e.title || '').replace(/[,;]/g, ' ')}`, `TRIGGER:-PT${e.reminder}M`, 'END:VALARM');
     lines.push('END:VEVENT');
   }
@@ -1739,7 +1852,7 @@ async function shareOrDownload(name, text, mime) {
 }
 ACT.eventICS = el => { const e = S.events.find(x => x.id === el.dataset.id); shareOrDownload(`${e.title.slice(0, 30) || 'compromisso'}.ics`, buildICS([e]), 'text/calendar'); };
 ACT.allICS = () => {
-  const evs = S.events.filter(e => e.date >= D.today());
+  const evs = S.events.filter(e => e.date >= D.today() || (e.repeat && (!e.repeat.until || e.repeat.until >= D.today())));
   if (!evs.length) return toast('Nenhum compromisso futuro para exportar', 'info');
   shareOrDownload('agenda-petala.ics', buildICS(evs), 'text/calendar');
 };
@@ -2293,7 +2406,12 @@ VIEWS.settings = () => {
     <button class="btn ghost block" style="margin-top:10px" data-act="copyBackup">Copiar backup (texto)</button>
     <button class="btn danger block" style="margin-top:10px" data-act="resetAll">Apagar todos os dados</button>
   </div>
-  <p class="foot-note">Pétala Planner · v1.0</p>`;
+  <div class="section-title"><h2>Sobre o app</h2></div>
+  <div class="card">
+    <div class="row between"><div><b>Pétala Planner</b><p class="small muted">Versão ${APP_VERSION} · ${APP_BUILD.slice(6, 8)}/${APP_BUILD.slice(4, 6)} ${APP_BUILD.slice(8, 10)}:${APP_BUILD.slice(10, 12)}</p></div>
+    <button class="btn soft sm" data-act="checkUpdate">${ic('repeat')} Procurar atualização</button></div>
+  </div>
+  <p class="foot-note">Pétala Planner · v${APP_VERSION}</p>`;
 };
 MOUNTS.settings = () => {
   const f = $('#profile-form');
@@ -3369,7 +3487,7 @@ function reminderTick() {
   if (!S) return;
   const now = new Date(), t = D.today(), nowMin = now.getHours() * 60 + now.getMinutes();
   let changed = false;
-  for (const e of S.events) {
+  for (const e of [...eventsOn(t), ...eventsOn(D.add(t, 1))]) {
     if (e.done || e.reminder == null || e.reminder < 0) continue;
     const startMin = e.allDay || !e.start ? 8 * 60 : toMin(e.start);
     const fire = D.parse(e.date); fire.setHours(0, 0, 0, 0); fire.setMinutes(startMin - (e.allDay || !e.start ? 0 : e.reminder));
@@ -3396,10 +3514,43 @@ function reminderTick() {
   }
 }
 
+/* ---------- Atualizações do app ---------- */
+const APP_VERSION = '1.2.1', APP_BUILD = '20261123100151';
+let updateShown = false;
+async function checkUpdate(manual = false) {
+  if (!/^https?:$/.test(location.protocol) || !navigator.onLine) { if (manual) toast('Conecte-se à internet para procurar atualizações', 'info'); return; }
+  try {
+    const r = await fetch('version.json?t=' + Date.now(), { cache: 'no-store' });
+    if (!r.ok) throw new Error(r.status);
+    const v = await r.json();
+    if (v.build && v.build !== APP_BUILD) showUpdateBar(v.version);
+    else if (manual) toast(`Você já está na versão mais recente (v${APP_VERSION})`, 'check');
+  } catch (e) { if (manual) toast('Não foi possível verificar agora', 'info'); }
+}
+function showUpdateBar(ver) {
+  if (updateShown) return; updateShown = true;
+  const bar = document.createElement('div');
+  bar.className = 'update-bar';
+  bar.innerHTML = `${ic('sparkle')}<span>Nova versão${ver ? ' v' + esc(ver) : ''} disponível</span><button class="btn primary sm" data-act="applyUpdate">Atualizar</button>`;
+  document.body.appendChild(bar);
+  requestAnimationFrame(() => bar.classList.add('show'));
+}
+ACT.applyUpdate = async () => {
+  saveNow(); // os dados ficam salvos no aparelho; só o app é trocado
+  try {
+    const reg = navigator.serviceWorker && await navigator.serviceWorker.getRegistration();
+    if (reg) { await reg.update(); if (reg.waiting) reg.waiting.postMessage('skipWaiting'); }
+    if (window.caches) for (const k of await caches.keys()) await caches.delete(k);
+  } catch (e) { }
+  location.reload();
+};
+ACT.checkUpdate = () => checkUpdate(true);
+
 let lastDay = null;
 function onResume() {
   if (D.today() !== lastDay) { lastDay = D.today(); runRecurrences(); if (UI.habitDate && UI.habitDate < D.today()) UI.habitDate = D.today(); render(); }
   reminderTick();
+  checkUpdate();
 }
 
 function init() {
@@ -3416,6 +3567,7 @@ function init() {
   if (!STORAGE_OK) setTimeout(() => toast('Armazenamento bloqueado neste modo. Instale o app para salvar seus dados.', 'alert'), 1200);
   requestPersistence();
   setTimeout(reminderTick, 2500);
+  setTimeout(() => checkUpdate(), 3000);
   setInterval(reminderTick, 30000);
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') onResume(); });
   if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
