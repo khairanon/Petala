@@ -51,13 +51,21 @@ O iPhone só instala um app web a partir de um endereço `https://`. Escolha uma
 Tarefa baixa 10 · média 15 · alta 25 · compromisso 10 · hábito 8 · etapa de meta 15 · meta concluída 60 · registro financeiro 4 (até 5 por dia) · depósito em meta 10 · conquista 25 · desafios 10 a 70.
 Desmarcar algo devolve o XP, então não dá para "farmar" pontos. Registrar despesas dá XP pelo **controle**, nunca pelo valor gasto.
 
-## 7. Estrutura do código (para atualizar depois)
+## 7. Aparência
+- Tema padrão **Retrô**: Sea Pink `#E098AC`, Beet Red `#68002C`, Crystal Blue `#A6C9DD`, Lemon Icing `#FFF8D5` e Rum Raisin `#441910`.
+- Títulos em **Bagel Fat One**, subtítulos em **Instrument Serif** itálico (fontes livres, licença SIL OFL, embutidas no app para funcionar offline).
+- Ilustrações botânicas e rabiscos desenhados para o app, efeito adesivo, textura de papel e barras listradas.
+- O tema antigo (Rosa & lilás) continua em Perfil → Configurações → Aparência.
+- Para o ícone novo aparecer na tela inicial, remova o atalho antigo e adicione de novo **depois de exportar um backup** (remover o ícone apaga os dados).
+
+## 8. Estrutura do código (para atualizar depois)
 O arquivo `index.html` é gerado a partir do código-fonte organizado:
 ```
 src/
   index.html            casca da página
-  css/                  base (cores/tokens), components, views
-  js/core/              utils (datas, R$), icons, store (dados), ui (sheets, toasts)
+  css/                  base (cores/tokens), components, views, theme-vintage (tema Retrô)
+  js/core/              utils (datas, R$, cores do tema), icons, doodles (ilustrações), store (dados), ui (sheets, toasts)
+  fonts/                Instrument Serif e Bagel Fat One
   js/game/              gamification (XP, níveis, desafios, conquistas)
   js/views/             home, agenda, tasks, habits, notes, goals, profile
   js/finance/           fin-core (cálculos), fin-charts, fin-views, fin-forms
